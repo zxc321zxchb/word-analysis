@@ -4,7 +4,6 @@ __pycache__/
 *$py.class
 
 # Docker
-Dockerfile
 .docker-compose.yml
 
 # Environment
