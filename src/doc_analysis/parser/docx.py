@@ -123,28 +123,57 @@ class DocxParser:
         
         # Load document
         doc = Document(io.BytesIO(file_content))
-        
+
         # Extract all images first
         self._extract_all_images(doc)
-        
+        # Track which images have been assigned
+        assigned_images = set()
+        # Reset relationship to image mapping
+        self._rel_to_image = {}
+
         # Iterate through document elements
         for element in doc.element.body:
             if isinstance(element, CT_P):
                 # Create Paragraph object from element
                 paragraph = Paragraph(element, doc)
                 text = paragraph.text.strip()
-                
+
                 # Check if this paragraph contains images
                 has_images = False
                 for child in paragraph._element.iter():
                     if child.tag.endswith('drawing'):
                         has_images = True
                         break
-                
+
                 # Skip only if both text and images are empty
                 if not text and not has_images:
                     continue
-                
+
+                # Collect images in this paragraph
+                paragraph_images = []
+                if has_images:
+                    # Build a mapping from relationship ID to image (only once)
+                    if not self._rel_to_image:
+                        for rel in doc.part.rels.values():
+                            if "image" in rel.target_ref:
+                                image_filename = rel.target_ref.split("/")[-1]
+                                for img in self._images:
+                                    if img.filename == image_filename:
+                                        self._rel_to_image[rel.rId] = img
+                                        break
+
+
+                    # Get blip elements to find image references in this paragraph
+                    for child in paragraph._element.iter():
+                        if child.tag.endswith('blip'):
+                            # Extract image relationship ID
+                            embed = child.get('{http://schemas.openxmlformats.org/officeDocument/2006/relationships}embed')
+                            if embed and embed in self._rel_to_image:
+                                img = self._rel_to_image[embed]
+                                if img.filename not in assigned_images:
+                                    paragraph_images.append(img)
+                                    assigned_images.add(img.filename)
+
                 heading_level = self._get_heading_level(paragraph)
                 
                 if heading_level is not None:
@@ -203,15 +232,12 @@ class DocxParser:
                     # Regular paragraph - add text to current section if exists
                     if text:
                         self.current_section.paragraphs.append(text)
-                    
-                    # Add images to current section if exists
-                    if has_images:
-                        # This paragraph contains an image
-                        # Add all images to current section (simplified approach)
-                        for image in self._images:
-                            if image.filename not in [img.filename for img in self.current_section.images]:
-                                self.current_section.images.append(image)
-                    
+
+                    # Add images from this paragraph to current section
+                    for image in paragraph_images:
+                        if image.filename not in [img.filename for img in self.current_section.images]:
+                            self.current_section.images.append(image)
+
             elif isinstance(element, CT_Tbl):
                 # Create Table object from element
                 table = Table(element, doc)
@@ -219,7 +245,7 @@ class DocxParser:
         
         # Finalize last section
         self._finalize_current_section()
-        
+
         return ParsedDocument(
             original_filename=filename,
             file_hash=file_hash,
