@@ -1,0 +1,45 @@
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: doc-analysis-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpassword
+      MYSQL_DATABASE: doc_analysis
+      MYSQL_USER: doc_user
+      MYSQL_PASSWORD: doc_password
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-prootpassword"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - doc-network
+
+  api:
+    build: .
+    container_name: doc-analysis-api
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=mysql+pymysql://doc_user:doc_password@mysql:3306/doc_analysis
+      - API_HOST=0.0.0.0
+      - API_PORT=8000
+      - API_PREFIX=/api/v1
+      - CORS_ORIGINS=["http://localhost:3000","http://localhost:8080"]
+      - LOG_LEVEL=INFO
+    depends_on:
+      mysql:
+        condition: service_healthy
+    volumes:
+      - ./src:/app/src
+    networks:
+      - doc-network
+
+volumes:
+  mysql_data:
+
+networks:
+  doc-network:
+    driver: bridge
