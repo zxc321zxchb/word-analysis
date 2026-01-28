@@ -1,6 +1,7 @@
 """文档分析API路由。"""
 import io
 import uuid
+import logging
 from typing import List, Dict, Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, status
@@ -8,12 +9,12 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
 from src.doc_analysis.config import settings
-from src.doc_analysis.db.session import get_db, engine
-from src.doc_analysis.db.models import Base, Document, NumberedSection
-from src.doc_analysis.db import crud
-from src.doc_analysis.parser.docx import parse_docx_file, DocxParser, ParsedDocument, ParsedSection
-from src.doc_analysis.parser.renderer import RichTextRenderer, RenderedImage
-from src.doc_analysis.api.models import (
+from src.doc_analysis.logger import get_logger
+from src.doc_analysis.db.session import get_db
+from src.doc_analysis.db.models import (
+    Base,
+    Document,
+    NumberedSection,
     DocumentParseResponse,
     DocumentDetailResponse,
     DocumentBriefResponse,
@@ -26,11 +27,12 @@ from src.doc_analysis.api.models import (
     ImageResponse,
     HealthResponse,
 )
-
-# Initialize database tables
-Base.metadata.create_all(bind=engine)
+from src.doc_analysis.db import crud
+from src.doc_analysis.parser.docx import parse_docx_file, DocxParser, ParsedDocument, ParsedSection
+from src.doc_analysis.parser.renderer import RichTextRenderer, RenderedImage
 
 router = APIRouter(prefix=settings.api_prefix, tags=["documents"])
+logger = get_logger(__name__)
 
 
 @router.get("/health", response_model=HealthResponse)
@@ -40,7 +42,8 @@ def health_check(db: Session = Depends(get_db)):
         from sqlalchemy import text
         db.execute(text("SELECT 1"))
         return HealthResponse(status="healthy", database="connected")
-    except Exception:
+    except Exception as e:
+        logger.debug(f"Health check database connection failed: {e}")
         return HealthResponse(status="unhealthy", database="disconnected")
 
 
@@ -69,14 +72,35 @@ async def parse_document(
     # Read file content
     file_content = await file.read()
 
+    # Validate file size
+    file_size_mb = len(file_content) / (1024 * 1024)
+    if file_size_mb > settings.max_file_size_mb:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"File size exceeds maximum allowed size of {settings.max_file_size_mb}MB",
+        )
+
+    # Validate MIME type
+    if file.content_type and file.content_type not in settings.allowed_mime_types:
+        logger.warning(
+            f"File {file.filename} has unexpected MIME type: {file.content_type}"
+        )
+
     # Parse document using heading styles
     try:
         parser = DocxParser()
         parsed = parser.parse_by_heading(file_content, file.filename)
-    except Exception as e:
+    except OSError as e:
+        logger.error(f"File I/O error while parsing document: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to parse document: {str(e)}",
+            detail="Failed to read document file",
+        )
+    except Exception as e:
+        logger.error(f"Failed to parse document {file.filename}: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to parse document",
         )
 
     # Check for duplicate (by hash)
@@ -182,8 +206,11 @@ async def parse_document(
                     sort_order=idx,
                 )
             except Exception as e:
-                # Log the error but continue processing
-                print(f"Error storing image {image.filename}: {str(e)}")
+                # Log error but continue processing other images
+                logger.warning(
+                    f"Failed to store image {image.filename} in section {section.number_path}: {e}",
+                    exc_info=True,
+                )
 
     # Mark document as parsed
     crud.mark_document_parsed(db, doc.id)
@@ -273,35 +300,40 @@ def get_documents(
     db: Session = Depends(get_db),
 ):
     """获取带分页的文档列表，包含基本信息。
-    
+
     返回按创建时间排序的文档（最新的在前）。
     每个文档包含基本信息和章节数量。
     """
     # Validate pagination parameters
     if page < 1:
         page = 1
-    if page_size < 1 or page_size > 100:
-        page_size = 10
-    
-    # Get documents with pagination
-    documents, total_count = crud.get_documents_with_pagination(db, page, page_size)
-    
+    if page_size < 1:
+        page_size = settings.default_page_size
+    elif page_size > settings.max_page_size:
+        page_size = settings.max_page_size
+
+    # Get documents with section counts (optimized single query)
+    documents, total_count, section_counts = crud.get_documents_with_section_counts(
+        db, page, page_size
+    )
+
     # Build response items with section counts
     items = []
     for doc in documents:
-        sections_count = crud.get_section_count_by_document(db, doc.id)
-        items.append(DocumentBriefResponse(
-            id=doc.id,
-            original_filename=doc.original_filename,
-            file_size=doc.file_size,
-            created_at=doc.created_at,
-            parsed_at=doc.parsed_at,
-            sections_count=sections_count,
-        ))
-    
+        items.append(
+            DocumentBriefResponse(
+                id=doc.id,
+                original_filename=doc.original_filename,
+                file_size=doc.file_size,
+                created_at=doc.created_at,
+                parsed_at=doc.parsed_at,
+                sections_count=section_counts.get(doc.id, 0),
+            )
+        )
+
     # Calculate total pages
     total_pages = (total_count + page_size - 1) // page_size
-    
+
     return DocumentListResponse(
         items=items,
         total=total_count,
@@ -309,6 +341,35 @@ def get_documents(
         page_size=page_size,
         pages=total_pages,
     )
+
+
+@router.delete("/documents/{document_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_document(
+    document_id: int,
+    db: Session = Depends(get_db),
+):
+    """根据文档ID删除文档及其所有关联的章节、表格和图片。
+
+    由于数据库外键设置了 CASCADE，删除文档会自动删除：
+    - 所有关联的章节 (numbered_sections)
+    - 所有章节的表格 (section_tables)
+    - 所有章节的图片 (section_images)
+
+    Args:
+        document_id: 要删除的文档ID
+
+    Returns:
+        HTTP 204 No Content 如果删除成功
+        HTTP 404 Not Found 如果文档不存在
+    """
+    success = crud.delete_document(db, document_id)
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="文档不存在",
+        )
+    # Return None for 204 No Content
+    return None
 
 
 def _section_to_response(

@@ -1,9 +1,10 @@
 """Database CRUD operations."""
 import hashlib
 from typing import List, Optional, Dict, Any, Tuple
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.sql import func
 
 from src.doc_analysis.db.models import (
     Document,
@@ -52,7 +53,8 @@ def mark_document_parsed(db: Session, doc_id: int) -> None:
     """Mark document as parsed."""
     doc = get_document_by_id(db, doc_id)
     if doc:
-        doc.parsed_at = datetime.utcnow()
+        # Use func.now() to get database server time, avoiding timezone issues
+        doc.parsed_at = func.now()
         db.commit()
 
 
@@ -195,21 +197,21 @@ def build_section_tree(sections: List[NumberedSection]) -> List[Dict[str, Any]]:
 
 def get_documents_with_pagination(db: Session, page: int = 1, page_size: int = 10) -> Tuple[List[Document], int]:
     """Get documents with pagination.
-    
+
     Args:
         db: Database session
         page: Page number (1-based)
         page_size: Number of items per page
-        
+
     Returns:
         Tuple of (documents, total_count)
     """
     # Calculate offset
     offset = (page - 1) * page_size
-    
+
     # Get total count
     total_count = db.query(Document).count()
-    
+
     # Get documents with pagination
     documents = (
         db.query(Document)
@@ -218,10 +220,79 @@ def get_documents_with_pagination(db: Session, page: int = 1, page_size: int = 1
         .limit(page_size)
         .all()
     )
-    
+
     return documents, total_count
+
+
+def get_documents_with_section_counts(
+    db: Session, page: int = 1, page_size: int = 10
+) -> Tuple[List[Document], int, Dict[int, int]]:
+    """Get documents with section counts in a single query.
+
+    This avoids the N+1 query problem by using a subquery to count sections.
+
+    Args:
+        db: Database session
+        page: Page number (1-based)
+        page_size: Number of items per page
+
+    Returns:
+        Tuple of (documents, total_count, section_counts_dict)
+        section_counts_dict maps document_id to section count
+    """
+    # Calculate offset
+    offset = (page - 1) * page_size
+
+    # Subquery to count sections per document
+    from sqlalchemy import func
+
+    section_counts = (
+        db.query(
+            NumberedSection.document_id,
+            func.count(NumberedSection.id).label("section_count"),
+        )
+        .group_by(NumberedSection.document_id)
+        .all()
+    )
+
+    # Convert to dict for easy lookup
+    section_counts_dict = {doc_id: count for doc_id, count in section_counts}
+
+    # Get total count
+    total_count = db.query(Document).count()
+
+    # Get documents with pagination
+    documents = (
+        db.query(Document)
+        .order_by(Document.created_at.desc())
+        .offset(offset)
+        .limit(page_size)
+        .all()
+    )
+
+    return documents, total_count, section_counts_dict
 
 
 def get_section_count_by_document(db: Session, document_id: int) -> int:
     """Get number of sections for a document."""
     return db.query(NumberedSection).filter(NumberedSection.document_id == document_id).count()
+
+
+def delete_document(db: Session, document_id: int) -> bool:
+    """Delete a document by ID.
+
+    Args:
+        db: Database session
+        document_id: Document ID to delete
+
+    Returns:
+        True if document was deleted, False if not found
+    """
+    doc = db.query(Document).filter(Document.id == document_id).first()
+    if not doc:
+        return False
+
+    # Delete will cascade to sections, tables, and images
+    db.delete(doc)
+    db.commit()
+    return True

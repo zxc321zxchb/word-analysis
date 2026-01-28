@@ -3,6 +3,7 @@ import base64
 import io
 import hashlib
 import re
+import logging
 from typing import List, Dict, Any, Optional, Tuple
 from dataclasses import dataclass, field
 
@@ -15,6 +16,8 @@ from docx.text.paragraph import Paragraph
 from src.doc_analysis.parser.numbering import (
     WordNumberingExtractor,
 )
+from src.doc_analysis.logger import get_logger
+from src.doc_analysis.config import settings
 from src.doc_analysis.parser.renderer import (
     RichTextRenderer,
     RenderedImage,
@@ -69,6 +72,7 @@ class DocxParser:
     """Parser for Word (.docx) documents."""
 
     def __init__(self):
+        self.logger = get_logger(__name__)
         self.numbering_extractor: Optional[WordNumberingExtractor] = None
         self.sections: List[ParsedSection] = []
         self.current_section: Optional[ParsedSection] = None
@@ -82,8 +86,8 @@ class DocxParser:
         
         style_name = paragraph.style.name.lower() if paragraph.style.name else ""
         
-        # Support heading levels 1-9
-        for level in range(1, 10):
+        # Support heading levels 1 to max_heading_level
+        for level in range(1, settings.max_heading_level + 1):
             if f"heading {level}" in style_name:
                 return level
         return None
@@ -112,8 +116,9 @@ class DocxParser:
         self.section_stack = []
         self._images = []
         
-        # Counters for each level (support levels 1-9)
-        counters = {level: 0 for level in range(1, 10)}
+        # Counters for each level (support levels 1 to max_heading_level)
+        max_level = settings.max_heading_level + 1
+        counters = {level: 0 for level in range(1, max_level)}
         current_context = {}
         
         # Load document
@@ -145,9 +150,9 @@ class DocxParser:
                 if heading_level is not None:
                     # Increment counter for this level
                     counters[heading_level] += 1
-                    
-                    # Reset deeper level counters (support up to level 9)
-                    for level in range(heading_level + 1, 10):
+
+                    # Reset deeper level counters
+                    for level in range(heading_level + 1, max_level):
                         counters[level] = 0
                     
                     # Build number path
@@ -184,8 +189,8 @@ class DocxParser:
                         "title": text
                     }
                     
-                    # Clear deeper levels (support up to level 9)
-                    for l in range(heading_level + 1, 10):
+                    # Clear deeper levels
+                    for l in range(heading_level + 1, max_level):
                         label = self._get_heading_label(l)
                         if label in current_context:
                             del current_context[label]
@@ -299,8 +304,11 @@ class DocxParser:
                     )
                     self._images.append(image)
                     image_index += 1
-                except Exception:
-                    pass
+                except (KeyError, ValueError, AttributeError) as e:
+                    # Skip images with invalid data
+                    self.logger.debug(f"Skipping invalid image: {e}")
+                except Exception as e:
+                    self.logger.warning(f"Unexpected error extracting image: {e}", exc_info=True)
 
     def _process_paragraph(self, paragraph: Paragraph, element: CT_P) -> None:
         """Process a paragraph element."""

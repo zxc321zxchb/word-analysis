@@ -19,6 +19,20 @@ class Settings(BaseSettings):
     # CORS
     cors_origins: List[str] = ["http://localhost:3000", "http://localhost:8080"]
 
+    # File Upload
+    max_file_size_mb: int = 50  # Maximum file size in MB
+    allowed_mime_types: List[str] = [
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/octet-stream",
+    ]
+
+    # Pagination
+    max_page_size: int = 100
+    default_page_size: int = 10
+
+    # Document Parser
+    max_heading_level: int = 9  # Maximum heading level supported (1-9)
+
     # Logging
     log_level: str = "INFO"
 

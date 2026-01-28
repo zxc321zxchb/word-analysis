@@ -1,8 +1,13 @@
 """Number extraction from Word XML."""
 import re
+import logging
 from typing import Optional, List, Dict
 from dataclasses import dataclass, field
 from docx import Document
+
+from src.doc_analysis.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -323,5 +328,9 @@ def get_display_number(paragraph) -> Optional[str]:
             return match.group(1)
 
         return None
-    except Exception:
+    except (AttributeError, TypeError) as e:
+        logger.debug(f"Failed to extract number from paragraph: {e}")
+        return None
+    except Exception as e:
+        logger.warning(f"Unexpected error extracting number from paragraph: {e}", exc_info=True)
         return None
