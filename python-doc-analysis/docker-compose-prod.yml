@@ -1,0 +1,48 @@
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: doc-analysis-mysql-prod
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-rootpassword}
+      MYSQL_DATABASE: doc_analysis
+      MYSQL_USER: doc_user
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-doc_password}
+    volumes:
+      - mysql_data_prod:/var/lib/mysql
+      - ./mysql-init:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${MYSQL_ROOT_PASSWORD:-rootpassword}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - doc-network-prod
+    restart: always
+
+  api:
+    image: ghcr.io/zxc321zxchb/word-analysis-api:latest
+    container_name: doc-analysis-api-prod
+    ports:
+      - "${API_PORT:-8000}:8000"
+    environment:
+      - DATABASE_URL=mysql+pymysql://doc_user:${MYSQL_PASSWORD:-doc_password}@mysql:3306/doc_analysis
+      - API_HOST=0.0.0.0
+      - API_PORT=8000
+      - API_PREFIX=/api/v1
+      - CORS_ORIGINS=["${FRONTEND_URL:-http://localhost:3000}"]
+      - LOG_LEVEL=INFO
+    depends_on:
+      mysql:
+        condition: service_healthy
+    networks:
+      - doc-network-prod
+    restart: always
+
+volumes:
+  mysql_data_prod:
+    driver: local
+
+networks:
+  doc-network-prod:
+    driver: bridge
+    name: doc-network-prod
