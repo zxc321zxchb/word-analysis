@@ -5,8 +5,7 @@ __pycache__/
 
 # Docker
 Dockerfile
-.dockerignore
-docker-compose.yml
+.docker-compose.yml
 
 # Environment
 .env
@@ -42,3 +41,8 @@ test_*.py
 # Large files
 *.docx
 *.pdf
+
+# Virtual environment
+venv/
+ENV/
+env/
