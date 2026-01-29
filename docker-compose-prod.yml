@@ -2,6 +2,8 @@ services:
   mysql:
     image: mysql:8.0
     container_name: doc-analysis-mysql-prod
+    ports:
+      - "${MYSQL_PORT:-3306}:3306"
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-rootpassword}
       MYSQL_DATABASE: doc_analysis
@@ -31,6 +33,15 @@ services:
       - API_PREFIX=/api/v1
       - CORS_ORIGINS=["${FRONTEND_URL:-http://localhost:3000}"]
       - LOG_LEVEL=INFO
+      # Content format: html, json, or both (production uses html for smaller response)
+      - CONTENT_FORMAT=${CONTENT_FORMAT:-html}
+      # File upload limits (higher limits for production)
+      - MAX_FILE_SIZE_MB=${MAX_FILE_SIZE_MB:-100}
+      - MAX_UPLOAD_SIZE_MB=${MAX_UPLOAD_SIZE_MB:-500}
+      # Gzip compression (always enabled in production)
+      - ENABLE_GZIP=true
+      - GZIP_MIN_SIZE=${GZIP_MIN_SIZE:-1000}
+      - GZIP_LEVEL=${GZIP_LEVEL:-6}
     depends_on:
       mysql:
         condition: service_healthy

@@ -21,6 +21,7 @@ class Settings(BaseSettings):
 
     # File Upload
     max_file_size_mb: int = 50  # Maximum file size in MB
+    max_upload_size_mb: int = 100  # Maximum total upload size in MB
     allowed_mime_types: List[str] = [
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         "application/octet-stream",
@@ -32,6 +33,14 @@ class Settings(BaseSettings):
 
     # Document Parser
     max_heading_level: int = 9  # Maximum heading level supported (1-9)
+
+    # Content Format
+    content_format: str = "both"  # "html", "json", or "both"
+
+    # Gzip Compression
+    enable_gzip: bool = True
+    gzip_min_size: int = 1000  # Minimum response size in bytes to trigger gzip
+    gzip_level: int = 6  # Compression level 1-9 (9 = max compression)
 
     # Logging
     log_level: str = "INFO"

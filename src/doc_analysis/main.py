@@ -3,6 +3,7 @@ import logging
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 
 from src.doc_analysis.config import settings
 from src.doc_analysis.api import routes
@@ -30,6 +31,15 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Configure Gzip compression
+if settings.enable_gzip:
+    app.add_middleware(
+        GZipMiddleware,
+        minimum_size=settings.gzip_min_size,
+        compresslevel=settings.gzip_level,
+    )
+    logger.info(f"Gzip compression enabled (level={settings.gzip_level}, min_size={settings.gzip_min_size})")
 
 # Include routes
 app.include_router(routes.router)

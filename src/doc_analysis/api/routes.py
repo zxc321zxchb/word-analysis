@@ -376,14 +376,25 @@ def _section_to_response(
     section: NumberedSection, db: Session
 ) -> SectionResponse:
     """将数据库章节转换为API响应。"""
+    # 根据配置决定是否返回 content_html 和 content_json
+    content_html = None
+    content_json = None
+
+    if settings.content_format == "html":
+        content_html = section.content_html
+    elif settings.content_format == "json":
+        content_json = section.content_json
+    else:  # "both" or any other value
+        content_html = section.content_html
+        content_json = section.content_json
 
     return SectionResponse(
         id=section.id,
         number_path=section.number_path,
         level=section.level,
         title=section.title,
-        content_html=section.content_html,
-        content_json=section.content_json,
+        content_html=content_html,
+        content_json=content_json,
         tables=[_table_to_response(t) for t in section.tables],
         images=[_image_to_response(i) for i in section.images],
     )
@@ -393,6 +404,17 @@ def _section_to_detail_response(
     section: NumberedSection, db: Session
 ) -> SectionDetailResponse:
     """将数据库章节转换为详细的API响应。"""
+    # 根据配置决定是否返回 content_html 和 content_json
+    content_html = None
+    content_json = None
+
+    if settings.content_format == "html":
+        content_html = section.content_html
+    elif settings.content_format == "json":
+        content_json = section.content_json
+    else:  # "both" or any other value
+        content_html = section.content_html
+        content_json = section.content_json
 
     parent = None
     if section.parent_id:
@@ -424,8 +446,8 @@ def _section_to_detail_response(
         number_path=section.number_path,
         level=section.level,
         title=section.title,
-        content_html=section.content_html,
-        content_json=section.content_json,
+        content_html=content_html,
+        content_json=content_json,
         tables=[_table_to_response(t) for t in section.tables],
         images=[_image_to_response(i) for i in section.images],
         parent=parent,
