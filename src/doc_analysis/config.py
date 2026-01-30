@@ -37,6 +37,10 @@ class Settings(BaseSettings):
     # Content Format
     content_format: str = "both"  # "html", "json", or "both"
 
+    # Response Content Control
+    include_tables: bool = False  # 是否返回 tables 字段，默认 false
+    include_images: bool = False  # 是否返回 images 字段，默认 false
+
     # Gzip Compression
     enable_gzip: bool = True
     gzip_min_size: int = 1000  # Minimum response size in bytes to trigger gzip

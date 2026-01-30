@@ -149,20 +149,20 @@ async def parse_document(
             heading_text += f" {parsed_section.title}"
         renderer.add_heading(heading_text, level=min(parsed_section.level + 1, 6))
 
-        # Add paragraphs
-        for p in parsed_section.paragraphs:
-            renderer.add_paragraph(p)
-
-        # Add tables
-        for table in parsed_section.tables:
-            renderer.add_table(table)
-
-        # Add images
-        for image in parsed_section.images:
-            renderer.add_image(image)
+        # Add content items in order (paragraphs, tables, images in original document order)
+        for item in parsed_section.content_items:
+            if item.type == "paragraph":
+                renderer.add_paragraph(item.data)
+            elif item.type == "table":
+                renderer.add_table(item.data)
+            elif item.type == "image":
+                renderer.add_image(item.data)
 
         content_html = renderer.render_html()
         content_json = renderer.render_json()
+
+        # Build marked_content from marked_paragraphs
+        marked_content = "\n".join(parsed_section.marked_paragraphs) if parsed_section.marked_paragraphs else None
 
         section = crud.create_section(
             db=db,
@@ -173,6 +173,7 @@ async def parse_document(
             title=parsed_section.title,
             content_html=content_html,
             content_json=str(content_json),
+            marked_content=marked_content,
             sort_order=sort_order,
         )
 
@@ -388,6 +389,16 @@ def _section_to_response(
         content_html = section.content_html
         content_json = section.content_json
 
+    # 根据配置决定是否返回 tables 和 images
+    tables = None
+    images = None
+
+    if settings.include_tables:
+        tables = [_table_to_response(t) for t in section.tables]
+
+    if settings.include_images:
+        images = [_image_to_response(i) for i in section.images]
+
     return SectionResponse(
         id=section.id,
         number_path=section.number_path,
@@ -395,8 +406,9 @@ def _section_to_response(
         title=section.title,
         content_html=content_html,
         content_json=content_json,
-        tables=[_table_to_response(t) for t in section.tables],
-        images=[_image_to_response(i) for i in section.images],
+        marked_content=section.marked_content,
+        tables=tables if tables is not None else [],
+        images=images if images is not None else [],
     )
 
 
@@ -415,6 +427,16 @@ def _section_to_detail_response(
     else:  # "both" or any other value
         content_html = section.content_html
         content_json = section.content_json
+
+    # 根据配置决定是否返回 tables 和 images
+    tables = None
+    images = None
+
+    if settings.include_tables:
+        tables = [_table_to_response(t) for t in section.tables]
+
+    if settings.include_images:
+        images = [_image_to_response(i) for i in section.images]
 
     parent = None
     if section.parent_id:
@@ -448,8 +470,9 @@ def _section_to_detail_response(
         title=section.title,
         content_html=content_html,
         content_json=content_json,
-        tables=[_table_to_response(t) for t in section.tables],
-        images=[_image_to_response(i) for i in section.images],
+        marked_content=section.marked_content,
+        tables=tables if tables is not None else [],
+        images=images if images is not None else [],
         parent=parent,
         children=children,
     )

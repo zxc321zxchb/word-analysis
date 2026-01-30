@@ -32,7 +32,10 @@ services:
       - CORS_ORIGINS=["http://localhost:3000","http://localhost:8080"]
       - LOG_LEVEL=INFO
       # Content format: html, json, or both
-      - CONTENT_FORMAT=both
+      - CONTENT_FORMAT=${CONTENT_FORMAT:-html}
+      # Response Content Control
+      - INCLUDE_TABLES=${INCLUDE_TABLES:-false}
+      - INCLUDE_IMAGES=${INCLUDE_IMAGES:-false}
       # File upload limits
       - MAX_FILE_SIZE_MB=50
       - MAX_UPLOAD_SIZE_MB=100
