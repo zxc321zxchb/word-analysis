@@ -58,40 +58,46 @@ class WordNumberingExtractor:
                 return
 
             xml = numbering_part.element
+            from docx.oxml.ns import qn
 
             # Parse abstractNum definitions
-            for abstract_num in xml.abstractNum:
-                abstract_num_id = int(abstract_num.abstractNumId.val)
+            for abstract_num in xml.findall(qn('w:abstractNum')):
+                abstract_num_id = int(abstract_num.get(qn('w:abstractNumId')))
 
                 self._abstract_nums[abstract_num_id] = {}
 
-                for lvl in abstract_num.lvl:
-                    ilvl = int(lvl.ilvl.val)
+                for lvl in abstract_num.findall(qn('w:lvl')):
+                    ilvl = int(lvl.get(qn('w:ilvl')))
 
                     # Get start value
                     start = 1
-                    if lvl.start is not None:
-                        start = int(lvl.start.val)
+                    start_elem = lvl.find(qn('w:start'))
+                    if start_elem is not None:
+                        start = int(start_elem.get(qn('w:val')))
 
                     # Get format
                     fmt = "decimal"
-                    if lvl.numFmt is not None:
-                        fmt = lvl.numFmt.val
+                    num_fmt = lvl.find(qn('w:numFmt'))
+                    if num_fmt is not None:
+                        fmt = num_fmt.get(qn('w:val'))
 
                     # Get level text template
                     lvl_text = "%1."
-                    if lvl.lvlText is not None:
-                        lvl_text = lvl.lvlText.val
+                    lvl_text_elem = lvl.find(qn('w:lvlText'))
+                    if lvl_text_elem is not None:
+                        lvl_text = lvl_text_elem.get(qn('w:val'))
 
                     self._abstract_nums[abstract_num_id][ilvl] = LevelDef(
                         ilvl=ilvl, start=start, fmt=fmt, lvl_text=lvl_text
                     )
 
             # Parse num definitions (numId -> abstractNumId mapping)
-            for num in xml.num:
-                num_id = int(num.numId.val)
-                abstract_num_id = int(num.abstractNumId.val)
-                self._num_to_abstract[num_id] = abstract_num_id
+            for num in xml.findall(qn('w:num')):
+                num_id = int(num.get(qn('w:numId')))
+                abstract_num_id_elem = num.find(qn('w:abstractNumId'))
+                if abstract_num_id_elem is not None:
+                    abstract_num_id = int(abstract_num_id_elem.get(qn('w:val')))
+                    self._num_to_abstract[num_id] = abstract_num_id
 
         except (AttributeError, TypeError):
             # No numbering part or parsing error

@@ -67,6 +67,7 @@ def create_section(
     title: Optional[str],
     content_html: Optional[str],
     content_json: Optional[str],
+    marked_content: Optional[str],
     sort_order: int,
 ) -> NumberedSection:
     """Create a new numbered section."""
@@ -78,6 +79,7 @@ def create_section(
         title=title,
         content_html=content_html,
         content_json=content_json,
+        marked_content=marked_content,
         sort_order=sort_order,
     )
     db.add(section)

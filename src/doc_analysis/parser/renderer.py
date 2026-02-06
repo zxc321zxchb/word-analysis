@@ -90,7 +90,10 @@ class RichTextRenderer:
     def add_table(self, table: RenderedTable) -> None:
         """Add a table block."""
         if table.json_data:
-            self.content_blocks.append(table.json_data)
+            # Add html field for render_html method
+            block = dict(table.json_data)
+            block["html"] = table.html
+            self.content_blocks.append(block)
         else:
             # Fallback to HTML content
             self.content_blocks.append(

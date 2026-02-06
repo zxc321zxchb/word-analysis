@@ -78,6 +78,7 @@ class NumberedSection(Base):
     title = Column(String(512), comment="Section title")
     content_html = Column(Text(length=4294967295), comment="HTML format content")
     content_json = Column(Text(length=4294967295), comment="JSON format content for rich text editor")
+    marked_content = Column(Text(length=4294967295), comment="带列表标记的文本内容，有序列表用<1>标识，无序列表用-标识")
     sort_order = Column(Integer, nullable=False, comment="Sort order")
     created_at = Column(TIMESTAMP, server_default=func.current_timestamp())
     updated_at = Column(
@@ -203,6 +204,7 @@ class SectionResponse(BaseModel):
     title: Optional[str]
     content_html: Optional[str]
     content_json: Optional[str]
+    marked_content: Optional[str] = None  # 带列表标记的内容
     tables: List["TableResponse"] = []
     images: List["ImageResponse"] = []
 

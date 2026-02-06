@@ -29,6 +29,13 @@ from src.doc_analysis.parser.renderer import (
 
 
 @dataclass
+class ContentItem:
+    """A content item with type for ordered rendering."""
+    type: str  # "paragraph", "table", "image"
+    data: Any
+
+
+@dataclass
 class ParsedSection:
     """A parsed numbered section."""
 
@@ -37,9 +44,11 @@ class ParsedSection:
     level: int = 1
     parent: Optional[Dict[str, str]] = None
     title: Optional[str] = None
-    paragraphs: List[str] = field(default_factory=list)
+    paragraphs: List[str] = field(default_factory=list)          # 纯文本（现有）
+    marked_paragraphs: List[str] = field(default_factory=list)   # 带列表标记的新字段
     tables: List[RenderedTable] = field(default_factory=list)
     images: List[RenderedImage] = field(default_factory=list)
+    content_items: List[ContentItem] = field(default_factory=list)
 
     def get_content_html(self) -> str:
         """Get HTML content."""
@@ -96,6 +105,92 @@ class DocxParser:
         """Get heading label like 'h1', 'h2', etc."""
         return f"h{level}"
 
+    def _get_list_info(self, paragraph: Paragraph) -> Optional[Dict[str, Any]]:
+        """检测段落是否为列表项。
+
+        Returns:
+            None - 不是列表
+            {"type": "ordered", "level": int, "num_id": int} - 有序列表
+            {"type": "bullet", "level": int, "num_id": int} - 无序列表
+        """
+        try:
+            element = paragraph._element
+            numPr = None
+
+            # First check paragraph's pPr for numPr (explicit numbering)
+            if element.pPr is not None and element.pPr.numPr is not None:
+                numPr = element.pPr.numPr
+
+            # If not found, check the style's pPr (style-based lists)
+            if numPr is None and paragraph.style is not None:
+                style_element = paragraph.style._element
+                if style_element.pPr is not None and style_element.pPr.numPr is not None:
+                    numPr = style_element.pPr.numPr
+
+            if numPr is None:
+                return None
+
+            ilvl = numPr.ilvl.val if numPr.ilvl is not None else 0
+            num_id = numPr.numId.val if numPr.numId is not None else 0
+
+            # 通过 numbering.xml 判断列表类型
+            list_type = self._get_list_type_from_num_id(num_id)
+
+            return {"type": list_type, "level": ilvl, "num_id": num_id}
+
+        except (AttributeError, TypeError):
+            return None
+
+    def _get_list_type_from_num_id(self, num_id: int) -> str:
+        """根据 num_id 判断列表类型（有序或无序）。"""
+        # 如果没有 numbering_extractor，尝试通过默认规则判断
+        if self.numbering_extractor is None:
+            # 默认的 num_id 规则：
+            # - 1-10 通常是有序列表
+            # - 11+ 通常是无序列表（子弹列表）
+            # 但这只是一个启发式规则
+            return "ordered" if num_id <= 10 else "bullet"
+
+        try:
+            # 通过 numbering extractor 获取列表格式
+            level_def = self.numbering_extractor._get_level_def(num_id, 0)
+            if level_def:
+                # 检查格式类型
+                if level_def.fmt in ("decimal", "roman", "upperRoman", "lowerRoman",
+                                     "upperLetter", "lowerLetter", "chineseCounting"):
+                    return "ordered"
+                elif level_def.fmt in ("bullet", "none"):
+                    return "bullet"
+                else:
+                    # 通过 lvl_text 判断
+                    if level_def.lvl_text and "%" in level_def.lvl_text:
+                        return "ordered"
+                    return "bullet"
+        except (AttributeError, TypeError):
+            pass
+
+        return "ordered"  # 默认假设为有序列表
+
+    def _format_list_item(self, list_type: str, level: int, counter: int, text: str) -> str:
+        """格式化列表项文本。
+
+        Args:
+            list_type: "ordered" 或 "bullet"
+            level: 缩进级别 (0, 1, 2...)
+            counter: 有序列表的序号
+            text: 原始文本
+
+        Returns:
+            格式化后的文本，如 "<1> 列表内容" 或 "- 列表内容"
+        """
+        # 计算缩进（每级2个空格）
+        indent = "  " * level
+
+        if list_type == "ordered":
+            return f"{indent}<{counter}> {text}"
+        else:
+            return f"{indent}- {text}"
+
     def parse_by_heading(self, file_content: bytes, filename: str) -> ParsedDocument:
         """Parse a Word document using heading styles (h1, h2, h3, h4, h5).
         
@@ -123,6 +218,17 @@ class DocxParser:
         
         # Load document
         doc = Document(io.BytesIO(file_content))
+
+        # Initialize numbering extractor for list type detection
+        self.numbering_extractor = WordNumberingExtractor(doc)
+
+        # List state tracking
+        list_state = {
+            "num_id": None,      # 当前列表 ID
+            "list_type": None,   # "ordered" 或 "bullet"
+            "level": 0,          # 当前列表级别
+            "counters": {}       # 各级别计数器 {level: count}
+        }
 
         # Extract all images first
         self._extract_all_images(doc)
@@ -224,24 +330,82 @@ class DocxParser:
                         if label in current_context:
                             del current_context[label]
                     
+                    # Reset list state when starting a new section
+                    list_state["num_id"] = None
+                    list_state["list_type"] = None
+                    list_state["level"] = 0
+                    list_state["counters"] = {}
+
                     # Finalize previous section and start new one
                     self._finalize_current_section()
                     self.current_section = section
                     
                 elif self.current_section is not None:
-                    # Regular paragraph - add text to current section if exists
-                    if text:
+                    # Check if this is a list item
+                    list_info = self._get_list_info(paragraph)
+
+                    if list_info is not None and text:
+                        # This is a list item
+                        num_id = list_info["num_id"]
+                        list_type = list_info["type"]
+                        level = list_info["level"]
+
+                        # Check if this is a new list or continuation
+                        if list_state["num_id"] != num_id or list_state["list_type"] != list_type:
+                            # New list started
+                            list_state["num_id"] = num_id
+                            list_state["list_type"] = list_type
+                            list_state["counters"] = {}
+
+                        # Update level
+                        list_state["level"] = level
+
+                        # Reset counters for deeper levels
+                        for l in range(level + 1, 9):
+                            if l in list_state["counters"]:
+                                del list_state["counters"][l]
+
+                        # Increment counter for current level
+                        if level not in list_state["counters"]:
+                            list_state["counters"][level] = 0
+                        list_state["counters"][level] += 1
+
+                        # Format the list item text
+                        counter = list_state["counters"][level]
+                        marked_text = self._format_list_item(list_type, level, counter, text)
+
+                        # Add to both paragraphs (plain text) and marked_paragraphs
                         self.current_section.paragraphs.append(text)
+                        self.current_section.marked_paragraphs.append(marked_text)
+                        self.current_section.content_items.append(ContentItem(type="paragraph", data=text))
+
+                    elif text:
+                        # Not a list item - reset list state
+                        list_state["num_id"] = None
+                        list_state["list_type"] = None
+                        list_state["level"] = 0
+                        list_state["counters"] = {}
+
+                        # Regular paragraph - add text to current section
+                        self.current_section.paragraphs.append(text)
+                        self.current_section.marked_paragraphs.append(text)
+                        # Add to ordered content items
+                        self.current_section.content_items.append(ContentItem(type="paragraph", data=text))
 
                     # Add images from this paragraph to current section
                     for image in paragraph_images:
                         if image.filename not in [img.filename for img in self.current_section.images]:
                             self.current_section.images.append(image)
+                            # Add to ordered content items
+                            self.current_section.content_items.append(ContentItem(type="image", data=image))
 
             elif isinstance(element, CT_Tbl):
                 # Create Table object from element
                 table = Table(element, doc)
-                self._process_table(table, element)
+                rendered_table = self._process_table_and_return(table, element)
+                if rendered_table and self.current_section is not None:
+                    # Add to ordered content items
+                    self.current_section.content_items.append(ContentItem(type="table", data=rendered_table))
         
         # Finalize last section
         self._finalize_current_section()
@@ -389,6 +553,12 @@ class DocxParser:
 
     def _process_table(self, table: Table, element: CT_Tbl) -> None:
         """Process a table element."""
+        rendered = self._process_table_and_return(table, element)
+        if rendered and self.current_section is not None:
+            self.current_section.tables.append(rendered)
+
+    def _process_table_and_return(self, table: Table, element: CT_Tbl) -> Optional[RenderedTable]:
+        """Process a table element and return the rendered table."""
         rows_data = []
         for row in table.rows:
             row_data = []
@@ -403,9 +573,8 @@ class DocxParser:
                 html=table_to_html(rows_data),
                 json_data=table_to_json(rows_data),
             )
-
-            if self.current_section is not None:
-                self.current_section.tables.append(rendered)
+            return rendered
+        return None
 
     def _finalize_current_section(self) -> None:
         """Finalize the current section and add to sections list."""
